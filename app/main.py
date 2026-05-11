@@ -1,6 +1,5 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-
+from pydantic import BaseModel, EmailStr
 from app import auth
 from app.middleware import log_requests
 
@@ -14,11 +13,12 @@ users = {}
 # Request models
 class UserCreate(BaseModel):
     name: str
-    email: str
+    email: EmailStr
     password: str
-
+    
+#login
 class UserLogin(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 # Server alive check
