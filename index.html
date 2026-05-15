@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live Attendance</title>
+</head>
+<body>
+
+    <h2>Live Attendance System</h2>
+
+    <h3>Login</h3>
+    <input type="email" id="email" placeholder="Email">
+    <br><br>
+    <input type="password" id="password" placeholder="Password">
+    <br><br>
+    <button onclick="login()">Login</button>
+
+    <hr>
+
+    <h3>Clock In</h3>
+   <video id="camera" autoplay playsinline width="300"></video>
+<br><br>
+<button onclick="captureImage()">Capture Image</button>
+<canvas id="canvas" width="300" height="220" style="display:none;"></canvas>    
+    <br><br>
+<button onclick="clockIn()">Clock In</button>
+    <pre id="result"></pre>
+
+    <script>
+
+let capturedBlob = null;
+
+navigator.mediaDevices.getUserMedia({
+    video: true
+})
+.then(function(stream){
+
+    document.getElementById("camera").srcObject = stream;
+
+})
+.catch(function(error){
+
+    console.log(error);
+
+});
+
+
+async function login() {
+
+    const email =
+    document.getElementById("email").value;
+
+    const password =
+    document.getElementById("password").value;
+
+    const response = await fetch(
+        "http://127.0.0.1:8000/login",
+        {
+            method:"POST",
+
+            headers:{
+                "Content-Type":"application/json"
+            },
+
+            body:JSON.stringify({
+                email:email,
+                password:password
+            })
+        }
+    );
+
+    const data =
+    await response.json();
+
+    if(data.access_token){
+
+        localStorage.setItem(
+            "token",
+            data.access_token
+        );
+
+        document.getElementById(
+            "result"
+        ).innerText=
+        "Login successful";
+
+    }
+
+}
+
+
+function captureImage(){
+
+    const video =
+    document.getElementById("camera");
+
+    const canvas =
+    document.getElementById("canvas");
+
+    const context =
+    canvas.getContext("2d");
+
+    context.drawImage(
+        video,
+        0,
+        0,
+        300,
+        220
+    );
+
+    canvas.toBlob(function(blob){
+
+        capturedBlob=blob;
+
+        document.getElementById(
+        "result"
+        ).innerText=
+        "Live image captured";
+
+    });
+
+}
+
+
+
+function clockIn(){
+
+const token =
+localStorage.getItem("token");
+
+if(!token){
+
+document.getElementById(
+"result"
+).innerText=
+"Please login first";
+
+return;
+
+}
+
+if(!capturedBlob){
+
+document.getElementById(
+"result"
+).innerText=
+"Capture image first";
+
+return;
+
+}
+
+navigator.geolocation.getCurrentPosition(
+
+async function(position){
+
+const latitude =
+position.coords.latitude;
+
+const longitude =
+position.coords.longitude;
+
+const formData =
+new FormData();
+
+formData.append(
+"image",
+capturedBlob,
+"capture.jpg"
+);
+
+formData.append(
+"latitude",
+latitude
+);
+
+formData.append(
+"longitude",
+longitude
+);
+
+const response =
+await fetch(
+"http://127.0.0.1:8000/clock-in",
+{
+method:"POST",
+
+headers:{
+"Authorization":
+"Bearer "+token
+},
+
+body:formData
+}
+);
+
+const data=
+await response.json();
+
+document.getElementById(
+"result"
+).innerText=
+
+"Latitude: "
++latitude+
+
+"\nLongitude: "
++longitude+
+
+"\nLocation: "
++data.location_name+
+
+"\n\n"
+
++JSON.stringify(
+data,
+null,
+2
+);
+
+}
+
+);
+
+}
+
+</script>
+
+</body>
+</html>

@@ -5,8 +5,17 @@ from app.middleware import log_requests
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from datetime import datetime
 from fastapi.security import OAuth2PasswordBearer
+import requests
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.middleware("http")(log_requests)
 
@@ -102,6 +111,26 @@ def is_inside_work_zone(latitude: float, longitude: float):
 
     return False
 
+def get_location_name(latitude, longitude):
+
+    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={latitude}&lon={longitude}"
+
+    headers = {
+        "User-Agent": "attendance-system"
+    }
+
+    response = requests.get(
+        url,
+        headers=headers
+    )
+
+    data = response.json()
+
+    return data.get(
+        "display_name",
+        "Unknown Location"
+    )
+
 def get_current_user(token: str = Depends(oauth2_scheme)):
 
     try:
@@ -157,8 +186,15 @@ def clock_in(
 
     suspicious_location = not location_valid
 
+    
+    location_name = get_location_name(
+    latitude,
+    longitude
+)
+
     attendance_records[current_user["email"]] = {
         "employee_name": current_user["name"],
+        "location_name": location_name,
         "employee_email": current_user["email"],
         "clock_in_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "clock_out_time": None,
@@ -170,14 +206,15 @@ def clock_in(
     }
 
     return {
-        "message": "Clock-in successful",
-        "employee_name": current_user["name"],
-        "employee_email": current_user["email"],
-        "clock_in_time": attendance_records[current_user["email"]]["clock_in_time"],
-        "identity_status": identified_employee,
-        "location_valid": location_valid,
-        "suspicious_location": suspicious_location
-    }
+    "message": "Clock-in successful",
+    "location_name": location_name,
+    "employee_name": current_user["name"],
+    "employee_email": current_user["email"],
+    "clock_in_time": attendance_records[current_user["email"]]["clock_in_time"],
+    "identity_status": identified_employee,
+    "location_valid": location_valid,
+    "suspicious_location": suspicious_location
+}
 
 @app.post("/clock-out")
 def clock_out(
@@ -208,6 +245,7 @@ def clock_out(
 
         "message": "Clock-out successful",
 
+         "location_name": existing_record["location_name"],
         "employee_name": current_user["name"],
 
         "employee_email": current_user["email"],
