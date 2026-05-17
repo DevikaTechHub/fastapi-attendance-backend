@@ -53,7 +53,7 @@ async function login() {
     document.getElementById("password").value;
 
     const response = await fetch(
-        "http://127.0.0.1:8000/login",
+        "/login",
         {
             method:"POST",
 
@@ -180,7 +180,7 @@ longitude
 
 const response =
 await fetch(
-"http://127.0.0.1:8000/clock-in",
+"/clock-in",
 {
 method:"POST",
 

@@ -7,6 +7,7 @@ from datetime import datetime
 from fastapi.security import OAuth2PasswordBearer
 import requests
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 app = FastAPI()
 app.add_middleware(
@@ -256,3 +257,7 @@ def clock_out(
 
         "identity_status": identified_employee
     }
+
+@app.get("/ui")
+def show_ui():
+    return FileResponse("index.html")
