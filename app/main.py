@@ -4,12 +4,26 @@ from app import auth
 from app.middleware import log_requests
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from datetime import datetime
+import math
 from fastapi.security import OAuth2PasswordBearer
 import requests
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+import os
+import shutil
+from PIL import Image
+from PIL.ExifTags import TAGS
 
 app = FastAPI()
+
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static"
+)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,12 +48,9 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
-# Server alive check
 @app.get("/")
-def home():
-    return {
-        "message": "Attendance Backend API Running"
-    }
+def serve_ui():
+    return FileResponse("static/index.html")
 
 # Register API
 @app.post("/register")
@@ -89,7 +100,12 @@ def login_user(user: UserLogin):
 
 # Temporary attendance storage
 attendance_records = {}
+UPLOAD_FOLDER = "uploads"
 
+os.makedirs(
+    UPLOAD_FOLDER,
+    exist_ok=True
+)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 def identify_employee_from_image(image):
@@ -98,19 +114,37 @@ def identify_employee_from_image(image):
 
 def is_inside_work_zone(latitude: float, longitude: float):
 
-    office_latitude = 11.2588
-    office_longitude = 75.7804
+    campus_latitude = 11.276794
+    campus_longitude = 75.9347535
 
-    allowed_range = 0.01
+    allowed_radius_meters = 100
 
-    if (
-        abs(latitude - office_latitude) <= allowed_range
-        and
-        abs(longitude - office_longitude) <= allowed_range
-    ):
-        return True
+    earth_radius = 6371000
 
-    return False
+    lat1 = math.radians(campus_latitude)
+    lon1 = math.radians(campus_longitude)
+
+    lat2 = math.radians(latitude)
+    lon2 = math.radians(longitude)
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1)
+        * math.cos(lat2)
+        * math.sin(dlon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a)
+    )
+
+    distance = earth_radius * c
+
+    return distance <= allowed_radius_meters
 
 def get_location_name(latitude, longitude):
 
@@ -173,49 +207,131 @@ def who_am_i(current_user: dict = Depends(get_current_user)):
         "name": current_user["name"],
         "email": current_user["email"]
     }
+
+def check_image_metadata(filepath):
+
+    try:
+
+        image = Image.open(filepath)
+
+        exif_data = image.getexif()
+
+        metadata = {}
+
+        for tag_id, value in exif_data.items():
+
+            tag = TAGS.get(tag_id, tag_id)
+
+            metadata[tag] = value
+
+        return metadata
+
+    except:
+
+        return {}
+    
+
 @app.post("/clock-in")
 def clock_in(
     image: UploadFile = File(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
+    captured_at: str = Form(...),
     current_user: dict = Depends(get_current_user)
 ):
 
     identified_employee = identify_employee_from_image(image)
 
-    location_valid = is_inside_work_zone(latitude, longitude)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    filename = f"{current_user['email']}_{timestamp}.jpg"
+
+    filepath = os.path.join(
+        UPLOAD_FOLDER,
+        filename
+    )
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(
+            image.file,
+            buffer
+        )
+
+    metadata = check_image_metadata(
+        filepath
+    )
+
+    location_valid = is_inside_work_zone(
+        latitude,
+        longitude
+    )
 
     suspicious_location = not location_valid
 
-    
     location_name = get_location_name(
-    latitude,
-    longitude
-)
+        latitude,
+        longitude
+    )
 
     attendance_records[current_user["email"]] = {
+
         "employee_name": current_user["name"],
-        "location_name": location_name,
+
         "employee_email": current_user["email"],
-        "clock_in_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+        "clock_in_time":
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+
+        "captured_at": captured_at,
+
         "clock_out_time": None,
+
         "latitude": latitude,
+
         "longitude": longitude,
+
+        "location_name": location_name,
+
         "identity_status": identified_employee,
+
         "location_valid": location_valid,
+
+        "saved_image_path": filepath,
+
+        "image_metadata": metadata,
+
         "suspicious_location": suspicious_location
     }
 
     return {
-    "message": "Clock-in successful",
-    "location_name": location_name,
-    "employee_name": current_user["name"],
-    "employee_email": current_user["email"],
-    "clock_in_time": attendance_records[current_user["email"]]["clock_in_time"],
-    "identity_status": identified_employee,
-    "location_valid": location_valid,
-    "suspicious_location": suspicious_location
-}
+
+        "message": "Clock-in successful",
+
+        "employee_name": current_user["name"],
+
+        "employee_email": current_user["email"],
+
+        "clock_in_time":
+        attendance_records[current_user["email"]]["clock_in_time"],
+
+        "captured_at": captured_at,
+
+        "latitude": latitude,
+
+        "longitude": longitude,
+
+        "location_name": location_name,
+
+        "identity_status": identified_employee,
+
+        "location_valid": location_valid,
+
+        "saved_image_path": filepath,
+
+        "image_metadata": metadata,
+
+        "suspicious_location": suspicious_location
+    }
 
 @app.post("/clock-out")
 def clock_out(
@@ -236,17 +352,33 @@ def clock_out(
             detail="No clock-in record found"
         )
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    filename = f"{current_user['email']}_clockout_{timestamp}.jpg"
+
+    filepath = os.path.join(
+        UPLOAD_FOLDER,
+        filename
+    )
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(
+            image.file,
+            buffer
+        )
+
     existing_record["clock_out_time"] = datetime.now().strftime(
         "%Y-%m-%d %H:%M:%S"
     )
 
     existing_record["clock_out_identity_status"] = identified_employee
 
+    existing_record["clock_out_image"] = filepath
+
     return {
 
         "message": "Clock-out successful",
 
-         "location_name": existing_record["location_name"],
         "employee_name": current_user["name"],
 
         "employee_email": current_user["email"],
@@ -255,9 +387,7 @@ def clock_out(
 
         "clock_out_time": existing_record["clock_out_time"],
 
+        "clock_out_image": filepath,
+
         "identity_status": identified_employee
     }
-
-@app.get("/ui")
-def show_ui():
-    return FileResponse("index.html")
