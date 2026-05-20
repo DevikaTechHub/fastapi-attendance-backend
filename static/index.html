@@ -32,8 +32,27 @@
 let capturedBlob = null;
 
 navigator.mediaDevices.getUserMedia({
-    video: true
+    video: {
+        facingMode: "user"
+    }
 })
+.then(function(stream){
+
+    const video = document.getElementById("camera");
+    video.srcObject = stream;
+
+    video.onloadedmetadata = function() {
+        video.play();
+    };
+
+})
+.catch(function(error){
+
+    document.getElementById("result").innerText =
+    "Camera error: " + error.message;
+
+});
+
 .then(function(stream){
 
     document.getElementById("camera").srcObject = stream;
@@ -92,38 +111,36 @@ async function login() {
 
 function captureImage(){
 
-    const video =
-    document.getElementById("camera");
+    const video = document.getElementById("camera");
+    const canvas = document.getElementById("canvas");
+    const context = canvas.getContext("2d");
 
-    const canvas =
-    document.getElementById("canvas");
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+        document.getElementById("result").innerText =
+        "Camera not ready. Please wait and try again.";
+        return;
+    }
 
-    const context =
-    canvas.getContext("2d");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
 
     context.drawImage(
         video,
         0,
         0,
-        300,
-        220
+        canvas.width,
+        canvas.height
     );
 
     canvas.toBlob(function(blob){
 
-        capturedBlob=blob;
+        capturedBlob = blob;
 
-        document.getElementById(
-        "result"
-        ).innerText=
-        "Live image captured";
+        document.getElementById("result").innerText =
+        "Live image captured successfully";
 
-    });
-
+    }, "image/jpeg", 0.95);
 }
-
-
-
 
 function clockIn(){
 
