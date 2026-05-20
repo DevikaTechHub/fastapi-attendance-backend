@@ -6,7 +6,13 @@
 - User login API
 - JWT authentication
 - Password hashing
-
+- JWT login and register
+- Live camera capture
+- Live GPS coordinates
+- OpenStreetMap location
+- Haversine geofence validation
+- Clock-in and clock-out
+- Image saving with timestamp
 ## Run the Project
 
 ```bash
