@@ -10,321 +10,262 @@
     <h3>Login</h3>
     <input type="email" id="email" placeholder="Email">
     <br><br>
+
     <input type="password" id="password" placeholder="Password">
     <br><br>
+
     <button onclick="login()">Login</button>
 
     <hr>
 
-    <h3>Clock In</h3>
-   <video id="camera" autoplay playsinline width="300"></video>
-<br><br>
-<button onclick="captureImage()">Capture Image</button>
-<canvas id="canvas" width="300" height="220" style="display:none;"></canvas>    
+    <h3>Attendance</h3>
+
+    <video id="camera" autoplay playsinline width="300"></video>
+    <canvas id="canvas" style="display:none;"></canvas>
+
     <br><br>
-<button onclick="clockIn()">Clock In</button>
-<br><br>
-<button onclick="clockOut()">Clock Out</button>
-    <pre id="result"></pre>
+
+    <button onclick="clockIn()">Clock In</button>
+    <br><br>
+
+    <button onclick="clockOut()">Clock Out</button>
+
+    <pre id="result">Login first, then allow GPS and camera permission.</pre>
 
     <script>
+        let cameraStream = null;
 
-let capturedBlob = null;
+        const result = document.getElementById("result");
+        const video = document.getElementById("camera");
+        const canvas = document.getElementById("canvas");
 
-navigator.mediaDevices.getUserMedia({
-    video: {
-        facingMode: "user"
-    }
-})
-.then(function(stream){
+        async function login() {
 
-    const video = document.getElementById("camera");
-    video.srcObject = stream;
+            const email = document.getElementById("email").value;
+            const password = document.getElementById("password").value;
 
-    video.onloadedmetadata = function() {
-        video.play();
-    };
+            try {
+                const response = await fetch(
+                    "/login",
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify({
+                            email: email,
+                            password: password
+                        })
+                    }
+                );
 
-})
-.catch(function(error){
+                const data = await response.json();
 
-    document.getElementById("result").innerText =
-    "Camera error: " + error.message;
+                if (!response.ok) {
+                    result.innerText = data.detail || "Login failed";
+                    return;
+                }
 
-});
+                localStorage.setItem(
+                    "token",
+                    data.access_token
+                );
 
-.then(function(stream){
+                result.innerText =
+                "Login successful. Now click Clock In or Clock Out.";
 
-    document.getElementById("camera").srcObject = stream;
-
-})
-.catch(function(error){
-
-    console.log(error);
-
-});
-
-
-async function login() {
-
-    const email =
-    document.getElementById("email").value;
-
-    const password =
-    document.getElementById("password").value;
-
-    const response = await fetch(
-        "/login",
-        {
-            method:"POST",
-
-            headers:{
-                "Content-Type":"application/json"
-            },
-
-            body:JSON.stringify({
-                email:email,
-                password:password
-            })
+            } catch (error) {
+                result.innerText =
+                "Login error: " + error.message;
+            }
         }
-    );
 
-    const data =
-    await response.json();
 
-    if(data.access_token){
+        function getLivePosition() {
 
-        localStorage.setItem(
-            "token",
-            data.access_token
-        );
+            return new Promise(function(resolve, reject) {
 
-        document.getElementById(
-            "result"
-        ).innerText=
-        "Login successful";
+                if (!navigator.geolocation) {
+                    reject(
+                        new Error("GPS is not supported in this browser")
+                    );
+                    return;
+                }
 
-    }
+                navigator.geolocation.getCurrentPosition(
+                    resolve,
+                    reject,
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 15000,
+                        maximumAge: 0
+                    }
+                );
+            });
+        }
 
-}
 
+        async function startCamera() {
 
-function captureImage(){
+            if (cameraStream) {
+                return;
+            }
 
-    const video = document.getElementById("camera");
-    const canvas = document.getElementById("canvas");
-    const context = canvas.getContext("2d");
+            cameraStream =
+            await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: "user"
+                },
+                audio: false
+            });
 
-    if (video.videoWidth === 0 || video.videoHeight === 0) {
-        document.getElementById("result").innerText =
-        "Camera not ready. Please wait and try again.";
-        return;
-    }
+            video.srcObject = cameraStream;
 
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+            await video.play();
+        }
 
-    context.drawImage(
-        video,
-        0,
-        0,
-        canvas.width,
-        canvas.height
-    );
 
-    canvas.toBlob(function(blob){
+        async function captureLiveImage() {
 
-        capturedBlob = blob;
+            await startCamera();
 
-        document.getElementById("result").innerText =
-        "Live image captured successfully";
+            if (
+                video.videoWidth === 0 ||
+                video.videoHeight === 0
+            ) {
+                throw new Error(
+                    "Camera not ready. Please try again."
+                );
+            }
 
-    }, "image/jpeg", 0.95);
-}
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
 
-function clockIn(){
+            const context = canvas.getContext("2d");
 
-const token =
-localStorage.getItem("token");
+            context.drawImage(
+                video,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
 
-if(!token){
+            return new Promise(function(resolve, reject) {
 
-document.getElementById(
-"result"
-).innerText=
-"Please login first";
+                canvas.toBlob(
+                    function(blob) {
 
-return;
+                        if (!blob) {
+                            reject(
+                                new Error("Image capture failed")
+                            );
+                            return;
+                        }
 
-}
-
-if(!capturedBlob){
-
-document.getElementById(
-"result"
-).innerText=
-"Capture image first";
-
-return;
-
-}
-
-navigator.geolocation.getCurrentPosition(
-
-async function(position){
-
-const latitude =
-position.coords.latitude;
-
-const longitude =
-position.coords.longitude;
-
-const capturedAt =
-new Date().toISOString();
-
-const formData =
-new FormData();
-
-formData.append(
-"image",
-capturedBlob,
-"capture.jpg"
-);
-
-formData.append(
-"latitude",
-latitude
-);
-
-formData.append(
-"longitude",
-longitude
-);
-
-formData.append(
-"captured_at",
-capturedAt
-);
-
-const response =
-await fetch(
-"/clock-in",
-{
-method:"POST",
-
-headers:{
-"Authorization":
-"Bearer "+token
-},
-
-body:formData
-}
-);
-
-const data=
-await response.json();
-
-document.getElementById(
-"result"
-).innerText=
-
-"Latitude: "
-+latitude+
-
-"\nLongitude: "
-+longitude+
-
-"\nCaptured At: "
-+capturedAt+
-
-"\nLocation: "
-+data.location_name+
-
-"\n\n"
-
-+JSON.stringify(
-data,
-null,
-2
-);
-
-}
-
-);
-
-}
-
-
-
-
-
-function clockOut(){
-
-const token =
-localStorage.getItem("token");
-
-if(!token){
-
-document.getElementById(
-"result"
-).innerText=
-"Please login first";
-
-return;
-
-}
-
-if(!capturedBlob){
-
-document.getElementById(
-"result"
-).innerText=
-"Capture image first";
-
-return;
-
-}
-
-const formData =
-new FormData();
-
-formData.append(
-"image",
-capturedBlob,
-"clockout_capture.jpg"
-);
-
-fetch(
-"/clock-out",
-{
-method:"POST",
-
-headers:{
-"Authorization":
-"Bearer "+token
-},
-
-body:formData
-}
-)
-.then(response => response.json())
-.then(data => {
-
-document.getElementById(
-"result"
-).innerText=
-
-JSON.stringify(
-data,
-null,
-2
-);
-
-});
-
-}
-
-</script>
+                        resolve(blob);
+
+                    },
+                    "image/jpeg",
+                    0.95
+                );
+            });
+        }
+
+
+        async function sendAttendance(endpoint, filename) {
+
+            const token = localStorage.getItem("token");
+
+            if (!token) {
+                result.innerText = "Please login first";
+                return;
+            }
+
+            result.innerText =
+            "Requesting live GPS and camera permission...";
+
+            try {
+                const position = await getLivePosition();
+
+                const imageBlob = await captureLiveImage();
+
+                const capturedAt = new Date().toISOString();
+
+                const latitude = position.coords.latitude;
+                const longitude = position.coords.longitude;
+                const accuracy = position.coords.accuracy;
+
+                const formData = new FormData();
+
+                formData.append(
+                    "image",
+                    imageBlob,
+                    filename
+                );
+
+                formData.append(
+                    "latitude",
+                    latitude
+                );
+
+                formData.append(
+                    "longitude",
+                    longitude
+                );
+
+                formData.append(
+                    "accuracy",
+                    accuracy
+                );
+
+                formData.append(
+                    "captured_at",
+                    capturedAt
+                );
+
+                const response = await fetch(
+                    endpoint,
+                    {
+                        method: "POST",
+                        headers: {
+                            "Authorization": "Bearer " + token
+                        },
+                        body: formData
+                    }
+                );
+
+                const data = await response.json();
+
+                result.innerText =
+                JSON.stringify(
+                    data,
+                    null,
+                    2
+                );
+
+            } catch (error) {
+                result.innerText =
+                "Attendance error: " + error.message;
+            }
+        }
+
+
+        function clockIn() {
+            sendAttendance(
+                "/clock-in",
+                "clockin.jpg"
+            );
+        }
+
+
+        function clockOut() {
+            sendAttendance(
+                "/clock-out",
+                "clockout.jpg"
+            );
+        }
+    </script>
 
 </body>
 </html>

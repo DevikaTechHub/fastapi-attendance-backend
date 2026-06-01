@@ -1,8 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 from app import auth
 from app.middleware import log_requests
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from datetime import datetime
 import math
 from fastapi.security import OAuth2PasswordBearer
@@ -15,6 +14,7 @@ import shutil
 from PIL import Image
 from PIL.ExifTags import TAGS
 
+
 app = FastAPI()
 
 app.mount(
@@ -23,36 +23,49 @@ app.mount(
     name="static"
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.middleware("http")(log_requests)
 
-# Temporary storage
 users = {}
+attendance_records = {}
 
-# Request models
+UPLOAD_FOLDER = "uploads"
+OFFICE_LATITUDE = 11.276794
+OFFICE_LONGITUDE = 75.9347535
+ALLOWED_RADIUS_METERS = 100
+MAX_GPS_ACCURACY_METERS = 1000
+
+os.makedirs(
+    UPLOAD_FOLDER,
+    exist_ok=True
+)
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+
+
 class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
 
-#login
+
 class UserLogin(BaseModel):
     email: EmailStr
     password: str
+
 
 @app.get("/")
 def serve_ui():
     return FileResponse("static/index.html")
 
-# Register API
+
 @app.post("/register")
 def register_user(user: UserCreate):
 
@@ -66,24 +79,26 @@ def register_user(user: UserCreate):
         "message": "User registered successfully"
     }
 
-# Login API
+
 @app.post("/login")
 def login_user(user: UserLogin):
 
     db_user = users.get(user.email)
 
     if not db_user:
-        return {
-            "message": "Invalid email"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
 
     if not auth.verify_password(
         user.password,
         db_user["password"]
     ):
-        return {
-            "message": "Invalid password"
-        }
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password"
+        )
 
     access_token = auth.create_access_token(
         data={
@@ -97,74 +112,9 @@ def login_user(user: UserLogin):
     }
 
 
-
-# Temporary attendance storage
-attendance_records = {}
-UPLOAD_FOLDER = "uploads"
-
-os.makedirs(
-    UPLOAD_FOLDER,
-    exist_ok=True
-)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
-
 def identify_employee_from_image(image):
-    # AI face recognition placeholder
     return "Face identified successfully"
 
-def is_inside_work_zone(latitude: float, longitude: float):
-
-    campus_latitude = 11.276794
-    campus_longitude = 75.9347535
-
-    allowed_radius_meters = 100
-
-    earth_radius = 6371000
-
-    lat1 = math.radians(campus_latitude)
-    lon1 = math.radians(campus_longitude)
-
-    lat2 = math.radians(latitude)
-    lon2 = math.radians(longitude)
-
-    dlat = lat2 - lat1
-    dlon = lon2 - lon1
-
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(lat1)
-        * math.cos(lat2)
-        * math.sin(dlon / 2) ** 2
-    )
-
-    c = 2 * math.atan2(
-        math.sqrt(a),
-        math.sqrt(1 - a)
-    )
-
-    distance = earth_radius * c
-
-    return distance <= allowed_radius_meters
-
-def get_location_name(latitude, longitude):
-
-    url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={latitude}&lon={longitude}"
-
-    headers = {
-        "User-Agent": "attendance-system"
-    }
-
-    response = requests.get(
-        url,
-        headers=headers
-    )
-
-    data = response.json()
-
-    return data.get(
-        "display_name",
-        "Unknown Location"
-    )
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
 
@@ -193,12 +143,16 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
 
         return user
 
-    except:
+    except HTTPException:
+        raise
+
+    except Exception:
         raise HTTPException(
             status_code=401,
             detail="Could not validate token"
         )
-    
+
+
 @app.get("/me")
 def who_am_i(current_user: dict = Depends(get_current_user)):
 
@@ -208,10 +162,171 @@ def who_am_i(current_user: dict = Depends(get_current_user)):
         "email": current_user["email"]
     }
 
+
+def validate_coordinates(
+    latitude: float,
+    longitude: float,
+    accuracy: float
+):
+
+    if latitude is None or longitude is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Latitude and longitude are required"
+        )
+
+    if latitude < -90 or latitude > 90:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid latitude"
+        )
+
+    if longitude < -180 or longitude > 180:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid longitude"
+        )
+
+    if latitude == 0 and longitude == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid GPS coordinates"
+        )
+
+    if accuracy is None or accuracy <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="GPS accuracy is required"
+        )
+
+    if accuracy > MAX_GPS_ACCURACY_METERS:
+        raise HTTPException(
+            status_code=400,
+            detail="GPS accuracy is too low"
+        )
+
+
+def calculate_distance_from_office(
+    latitude: float,
+    longitude: float
+):
+
+    earth_radius = 6371000
+
+    lat1 = math.radians(OFFICE_LATITUDE)
+    lon1 = math.radians(OFFICE_LONGITUDE)
+
+    lat2 = math.radians(latitude)
+    lon2 = math.radians(longitude)
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1)
+        * math.cos(lat2)
+        * math.sin(dlon / 2) ** 2
+    )
+
+    c = 2 * math.atan2(
+        math.sqrt(a),
+        math.sqrt(1 - a)
+    )
+
+    distance = earth_radius * c
+
+    return distance
+
+
+def validate_geofence(
+    latitude: float,
+    longitude: float
+):
+
+    distance = calculate_distance_from_office(
+        latitude,
+        longitude
+    )
+
+    if distance > ALLOWED_RADIUS_METERS:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Outside allowed office radius. "
+                f"Distance: {round(distance, 2)} meters"
+            )
+        )
+
+    return distance
+
+
+def get_location_name(
+    latitude,
+    longitude
+):
+
+    url = (
+        "https://nominatim.openstreetmap.org/reverse"
+        f"?format=json&lat={latitude}&lon={longitude}"
+    )
+
+    headers = {
+        "User-Agent": "attendance-system"
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=10
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        return data.get(
+            "display_name",
+            "Unknown Location"
+        )
+
+    except requests.RequestException:
+        return "Location lookup unavailable"
+
+
+def save_uploaded_image(
+    image: UploadFile,
+    email: str,
+    attendance_type: str
+):
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    safe_email = (
+        email.replace("@", "_")
+        .replace(".", "_")
+    )
+
+    filename = f"{safe_email}_{attendance_type}_{timestamp}.jpg"
+
+    filepath = os.path.join(
+        UPLOAD_FOLDER,
+        filename
+    )
+
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(
+            image.file,
+            buffer
+        )
+
+    return filepath
+
+
 def check_image_metadata(filepath):
 
     try:
-
         image = Image.open(filepath)
 
         exif_data = image.getexif()
@@ -222,172 +337,191 @@ def check_image_metadata(filepath):
 
             tag = TAGS.get(tag_id, tag_id)
 
-            metadata[tag] = value
+            metadata[str(tag)] = str(value)
 
         return metadata
 
-    except:
-
+    except Exception:
         return {}
-    
+
 
 @app.post("/clock-in")
 def clock_in(
     image: UploadFile = File(...),
     latitude: float = Form(...),
     longitude: float = Form(...),
+    accuracy: float = Form(...),
     captured_at: str = Form(...),
     current_user: dict = Depends(get_current_user)
 ):
 
-    identified_employee = identify_employee_from_image(image)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    filename = f"{current_user['email']}_{timestamp}.jpg"
-
-    filepath = os.path.join(
-        UPLOAD_FOLDER,
-        filename
+    validate_coordinates(
+        latitude,
+        longitude,
+        accuracy
     )
 
-    with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(
-            image.file,
-            buffer
-        )
-
-    metadata = check_image_metadata(
-        filepath
-    )
-
-    location_valid = is_inside_work_zone(
+    distance = validate_geofence(
         latitude,
         longitude
     )
 
-    suspicious_location = not location_valid
+    identified_employee = identify_employee_from_image(image)
+
+    filepath = save_uploaded_image(
+        image,
+        current_user["email"],
+        "clockin"
+    )
+
+    metadata = check_image_metadata(filepath)
 
     location_name = get_location_name(
         latitude,
         longitude
     )
 
+    clock_in_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     attendance_records[current_user["email"]] = {
 
         "employee_name": current_user["name"],
-
         "employee_email": current_user["email"],
-
-        "clock_in_time":
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-
+        "clock_in_time": clock_in_time,
         "captured_at": captured_at,
-
         "clock_out_time": None,
-
         "latitude": latitude,
-
         "longitude": longitude,
-
+        "accuracy": accuracy,
+        "distance_from_office_meters": round(distance, 2),
         "location_name": location_name,
-
         "identity_status": identified_employee,
-
-        "location_valid": location_valid,
-
+        "location_valid": True,
         "saved_image_path": filepath,
-
-        "image_metadata": metadata,
-
-        "suspicious_location": suspicious_location
+        "image_metadata": metadata
     }
 
     return {
-
+        "status": "success",
         "message": "Clock-in successful",
 
-        "employee_name": current_user["name"],
+        "employee": {
+            "name": current_user["name"],
+            "email": current_user["email"]
+        },
 
-        "employee_email": current_user["email"],
+        "attendance": {
+            "type": "clock_in",
+            "clock_in_time": clock_in_time,
+            "captured_at": captured_at,
+            "image_path": filepath
+        },
 
-        "clock_in_time":
-        attendance_records[current_user["email"]]["clock_in_time"],
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude,
+            "accuracy": accuracy,
+            "distance_from_office_meters": round(distance, 2),
+            "inside_geofence": True,
+            "address": location_name
+        },
 
-        "captured_at": captured_at,
+        "identity": {
+            "status": identified_employee
+        },
 
-        "latitude": latitude,
-
-        "longitude": longitude,
-
-        "location_name": location_name,
-
-        "identity_status": identified_employee,
-
-        "location_valid": location_valid,
-
-        "saved_image_path": filepath,
-
-        "image_metadata": metadata,
-
-        "suspicious_location": suspicious_location
+        "image_metadata": metadata
     }
+
 
 @app.post("/clock-out")
 def clock_out(
     image: UploadFile = File(...),
+    latitude: float = Form(...),
+    longitude: float = Form(...),
+    accuracy: float = Form(...),
+    captured_at: str = Form(...),
     current_user: dict = Depends(get_current_user)
 ):
-
-    identified_employee = identify_employee_from_image(image)
 
     existing_record = attendance_records.get(
         current_user["email"]
     )
 
     if not existing_record:
-
         raise HTTPException(
             status_code=404,
             detail="No clock-in record found"
         )
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    filename = f"{current_user['email']}_clockout_{timestamp}.jpg"
-
-    filepath = os.path.join(
-        UPLOAD_FOLDER,
-        filename
+    validate_coordinates(
+        latitude,
+        longitude,
+        accuracy
     )
 
-    with open(filepath, "wb") as buffer:
-        shutil.copyfileobj(
-            image.file,
-            buffer
-        )
-
-    existing_record["clock_out_time"] = datetime.now().strftime(
-        "%Y-%m-%d %H:%M:%S"
+    distance = validate_geofence(
+        latitude,
+        longitude
     )
 
-    existing_record["clock_out_identity_status"] = identified_employee
+    identified_employee = identify_employee_from_image(image)
 
+    filepath = save_uploaded_image(
+        image,
+        current_user["email"],
+        "clockout"
+    )
+
+    metadata = check_image_metadata(filepath)
+
+    location_name = get_location_name(
+        latitude,
+        longitude
+    )
+
+    clock_out_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    existing_record["clock_out_time"] = clock_out_time
+    existing_record["clock_out_captured_at"] = captured_at
     existing_record["clock_out_image"] = filepath
+    existing_record["clock_out_latitude"] = latitude
+    existing_record["clock_out_longitude"] = longitude
+    existing_record["clock_out_accuracy"] = accuracy
+    existing_record["clock_out_distance_from_office_meters"] = round(distance, 2)
+    existing_record["clock_out_location_name"] = location_name
+    existing_record["clock_out_identity_status"] = identified_employee
+    existing_record["clock_out_image_metadata"] = metadata
 
     return {
-
+        "status": "success",
         "message": "Clock-out successful",
 
-        "employee_name": current_user["name"],
+        "employee": {
+            "name": current_user["name"],
+            "email": current_user["email"]
+        },
 
-        "employee_email": current_user["email"],
+        "attendance": {
+            "type": "clock_out",
+            "clock_in_time": existing_record["clock_in_time"],
+            "clock_out_time": clock_out_time,
+            "captured_at": captured_at,
+            "image_path": filepath
+        },
 
-        "clock_in_time": existing_record["clock_in_time"],
+        "location": {
+            "latitude": latitude,
+            "longitude": longitude,
+            "accuracy": accuracy,
+            "distance_from_office_meters": round(distance, 2),
+            "inside_geofence": True,
+            "address": location_name
+        },
 
-        "clock_out_time": existing_record["clock_out_time"],
+        "identity": {
+            "status": identified_employee
+        },
 
-        "clock_out_image": filepath,
-
-        "identity_status": identified_employee
+        "image_metadata": metadata
     }
