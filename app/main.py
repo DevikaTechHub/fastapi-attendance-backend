@@ -4,7 +4,7 @@ from app import auth
 from app.middleware import log_requests
 from datetime import datetime
 import math
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import requests
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -54,11 +54,9 @@ class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
-
-
-class UserLogin(BaseModel):
-    email: EmailStr
-    password: str
+    office_latitude: float | None = None
+    office_longitude: float | None = None
+    allowed_radius_meters: float | None = None
 
 
 @app.get("/")
@@ -72,7 +70,10 @@ def register_user(user: UserCreate):
     users[user.email] = {
         "name": user.name,
         "email": user.email,
-        "password": auth.hash_password(user.password)
+        "password": auth.hash_password(user.password),
+        "office_latitude": user.office_latitude or OFFICE_LATITUDE,
+        "office_longitude": user.office_longitude or OFFICE_LONGITUDE,
+        "allowed_radius_meters": user.allowed_radius_meters or ALLOWED_RADIUS_METERS
     }
 
     return {
@@ -81,9 +82,9 @@ def register_user(user: UserCreate):
 
 
 @app.post("/login")
-def login_user(user: UserLogin):
+def login_user(form_data: OAuth2PasswordRequestForm = Depends()):
 
-    db_user = users.get(user.email)
+    db_user = users.get(form_data.username)
 
     if not db_user:
         raise HTTPException(
@@ -92,7 +93,7 @@ def login_user(user: UserLogin):
         )
 
     if not auth.verify_password(
-        user.password,
+        form_data.password,
         db_user["password"]
     ):
         raise HTTPException(
@@ -208,13 +209,15 @@ def validate_coordinates(
 
 def calculate_distance_from_office(
     latitude: float,
-    longitude: float
+    longitude: float,
+    office_latitude: float,
+    office_longitude: float
 ):
 
     earth_radius = 6371000
 
-    lat1 = math.radians(OFFICE_LATITUDE)
-    lon1 = math.radians(OFFICE_LONGITUDE)
+    lat1 = math.radians(office_latitude)
+    lon1 = math.radians(office_longitude)
 
     lat2 = math.radians(latitude)
     lon2 = math.radians(longitude)
@@ -241,15 +244,20 @@ def calculate_distance_from_office(
 
 def validate_geofence(
     latitude: float,
-    longitude: float
+    longitude: float,
+    current_user: dict
 ):
 
     distance = calculate_distance_from_office(
         latitude,
-        longitude
+        longitude,
+        current_user["office_latitude"],
+        current_user["office_longitude"]
     )
 
-    if distance > ALLOWED_RADIUS_METERS:
+    allowed_radius_meters = current_user["allowed_radius_meters"]
+
+    if distance > allowed_radius_meters:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -363,7 +371,8 @@ def clock_in(
 
     distance = validate_geofence(
         latitude,
-        longitude
+        longitude,
+        current_user
     )
 
     identified_employee = identify_employee_from_image(image)
@@ -394,6 +403,9 @@ def clock_in(
         "longitude": longitude,
         "accuracy": accuracy,
         "distance_from_office_meters": round(distance, 2),
+        "office_latitude": current_user["office_latitude"],
+        "office_longitude": current_user["office_longitude"],
+        "allowed_radius_meters": current_user["allowed_radius_meters"],
         "location_name": location_name,
         "identity_status": identified_employee,
         "location_valid": True,
@@ -423,6 +435,9 @@ def clock_in(
             "accuracy": accuracy,
             "distance_from_office_meters": round(distance, 2),
             "inside_geofence": True,
+            "office_latitude": current_user["office_latitude"],
+            "office_longitude": current_user["office_longitude"],
+            "allowed_radius_meters": current_user["allowed_radius_meters"],
             "address": location_name
         },
 
@@ -462,7 +477,8 @@ def clock_out(
 
     distance = validate_geofence(
         latitude,
-        longitude
+        longitude,
+        current_user
     )
 
     identified_employee = identify_employee_from_image(image)
@@ -489,6 +505,9 @@ def clock_out(
     existing_record["clock_out_longitude"] = longitude
     existing_record["clock_out_accuracy"] = accuracy
     existing_record["clock_out_distance_from_office_meters"] = round(distance, 2)
+    existing_record["clock_out_office_latitude"] = current_user["office_latitude"]
+    existing_record["clock_out_office_longitude"] = current_user["office_longitude"]
+    existing_record["clock_out_allowed_radius_meters"] = current_user["allowed_radius_meters"]
     existing_record["clock_out_location_name"] = location_name
     existing_record["clock_out_identity_status"] = identified_employee
     existing_record["clock_out_image_metadata"] = metadata
@@ -516,6 +535,9 @@ def clock_out(
             "accuracy": accuracy,
             "distance_from_office_meters": round(distance, 2),
             "inside_geofence": True,
+            "office_latitude": current_user["office_latitude"],
+            "office_longitude": current_user["office_longitude"],
+            "allowed_radius_meters": current_user["allowed_radius_meters"],
             "address": location_name
         },
 
